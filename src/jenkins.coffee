@@ -14,7 +14,7 @@
 #   hubot jenkins b <jobNumber> - builds the job specified by jobNumber. List jobs to get number.
 #   hubot jenkins build <job> - builds the specified Jenkins job
 #   hubot jenkins build <job>, <params> - builds the specified Jenkins job with parameters as key=value&key2=value2
-#   hubot jenkins list <filter> - lists Jenkins jobs
+#   hubot jenkins list <filter> - lists Jenkins jobs (BB)
 #   hubot jenkins describe <job> - Describes the specified Jenkins job
 #   hubot jenkins last <job> - Details about the last build for the specified Jenkins job
 
@@ -23,6 +23,7 @@
 #   dougcole
 
 querystring = require 'querystring'
+Conversation = require 'hubot-conversation'
 
 # Holds a list of jobs, so we can trigger them with a number
 # instead of the job's name. Gets populated on when calling
@@ -37,7 +38,7 @@ jenkinsBuildById = (msg) ->
     msg.match[1] = job
     jenkinsBuild(msg)
   else
-    msg.reply "I couldn't find that job. Try `jenkins list` to get a list."
+    msg.reply "Sorry, I don't know this job!"
 
 jenkinsBuild = (msg, buildWithEmptyParameters) ->
     url = process.env.HUBOT_JENKINS_URL
@@ -58,7 +59,7 @@ jenkinsBuild = (msg, buildWithEmptyParameters) ->
         if err
           msg.reply "Jenkins says: #{err}"
         else if 200 <= res.statusCode < 400 # Or, not an error code.
-          msg.reply "(#{res.statusCode}) Build started for #{unescapedJob} #{url}/job/#{job}"
+          msg.reply "Build started for '#{unescapedJob}' #{url}/job/#{job}"
         else if 400 == res.statusCode
           jenkinsBuild(msg, true)
         else
@@ -183,15 +184,16 @@ jenkinsList = (msg) ->
       req.headers Authorization: "Basic #{auth}"
 
     req.get() (err, res, body) ->
-        response = ""
+        response = "Ok, here are jobs I found available to trigger deployment: \n"
         if err
           msg.send "Jenkins says: #{err}"
         else
           try
             content = JSON.parse(body)
             for jobFromServer in content.jobs
-              # Add new jobs to the jobList
-              jobList.push(jobFromServer.name) if jobList.indexOf(jobFromServer.name) is -1
+              # Add new jobs to the jobList (if passed the filter)
+              if filter.test jobFromServer.name
+                jobList.push(jobFromServer.name) if jobList.indexOf(jobFromServer.name) is -1
 
             content.jobs.sort (a, b) ->
               aIndex = jobList.indexOf a.name
@@ -201,11 +203,44 @@ jenkinsList = (msg) ->
               state = if job.color == "red" then "FAIL" else "PASS"
               if filter.test job.name
                 response += "[#{index + 1}] #{state} #{job.name}\n"
+            response += "use 'deploy <job_index>' for triggering the deployment"
             msg.send response
           catch error
             msg.send error
 
+# ----------------- DEPLOYMENT -----------------
+deployUser = ""
+deployEnv = "UNKNOWN"
+deployBranch = "UNKNOWN"
+         
+addEnvChoices = (dialog, m) ->
+    m.reply 'Sure, which environment should I deploy then? [CN|DE]'
+    dialog.addChoice(/CN$|cn$|china$/i, (msg) ->
+      deployEnv = msg.match[0]
+      addBranchChoices(dialog, msg)
+    )
+    dialog.addChoice(/DE$|de$|germany$/i, (msg) ->
+      msg.reply 'Sorry, I cannot do that yet... Contact @BartoszBoron for help ;-)'
+    )
+
+addBranchChoices = (dialog, m) ->
+    m.reply 'Perfect! Which branch should I use?'
+    dialog.addChoice(/master$|branch_(.*)/i, (msg) ->
+      deployBranch = msg.match[0]
+      msg.match[1] = 'p_' + deployEnv + '_FLUS_FLUB_Build_Push'
+      msg.match[3] = 'branch=' + deployBranch
+      #msg.reply 'Okidoki! Deploying SALLY from branch <' +deployBranch+ '> to <' +deployEnv+ '> environment!'
+      jenkinsBuild(msg, false)
+    )
+    dialog.addChoice(/(.*)/i, (msg) ->
+      msg.reply 'Does not seem to be a valid branch! I am confused now... You have to start again...'
+    )
+# ------------------------------------------------
+
 module.exports = (robot) ->
+    
+  deployTask = new Conversation(robot)
+    
   robot.respond /j(?:enkins)? build ([\w\.\-_ ]+)(, (.+))?/i, (msg) ->
     jenkinsBuild(msg, false)
 
@@ -220,6 +255,27 @@ module.exports = (robot) ->
 
   robot.respond /j(?:enkins)? last (.*)/i, (msg) ->
     jenkinsLast(msg)
+  
+    
+  robot.respond /deploy$/, (msg) ->
+    dialog = deployTask.startDialog(msg)
+    addEnvChoices(dialog, msg)
+    dialog.addChoice /(.*)/i, (msg2) ->
+      msg2.reply 'It is not a valid choice! Please start again '
+      dialog.resetChoices()
+
+  robot.respond /deploy (master|branch_(.*)) to (CN|DE)/i, (msg) ->
+    console.log(msg.match)
+    jobList = []
+    # filter of available jobs for deployment
+    branch = msg.match[1]
+    env = msg.match[3]
+    msg.match[1] = 'p_' + env + '_FLUS_FLUB_Build_Push'
+    msg.match[3] = 'branch=' + branch
+    jenkinsBuild(msg, false)
+  
+  robot.respond /deploy (\d+)/i, (msg) ->
+    jenkinsBuildById(msg)
 
   robot.jenkins = {
     list: jenkinsList,

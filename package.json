@@ -1,5 +1,5 @@
 {
-  "name": "hubot-jenkins",
+  "name": "hubot-cs-jenkins",
   "description": "Jenkins Integration for Hubot",
   "version": "1.0.2",
   "author": "Doug Cole",
@@ -20,7 +20,8 @@
   },
 
   "dependencies": {
-    "coffee-script": "~1.6"
+    "coffee-script": "~1.6",
+    "hubot-conversation": "1.1.1"
   },
 
   "devDependencies": {
